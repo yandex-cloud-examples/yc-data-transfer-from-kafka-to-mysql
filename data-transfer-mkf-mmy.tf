@@ -1,39 +1,54 @@
-# Infrastructure for the Yandex Cloud Managed Service for Apache Kafka®, Managed Service for MySQL and Data Transfer
+# Infrastructure for the Yandex Cloud Managed Service for Apache Kafka®, Managed Service for MySQL, and Data Transfer
 #
-# RU: https://cloud.yandex.ru/docs/data-transfer/tutorials/data-transfer-mkf-mmy
-# EN: https://cloud.yandex.com/en/docs/data-transfer/tutorials/data-transfer-mkf-mmy
+# RU: https://yandex.cloud/ru/docs/data-transfer/tutorials/mkf-to-mmy
+# EN: https://yandex.cloud/en/docs/data-transfer/tutorials/mkf-to-mmy
 #
-# Specify the following settings:
+# Configure the parameters of the source and target clusters:
+
 locals {
   # Source Managed Service for Apache Kafka® cluster settings:
-  source_kf_version    = "" # Set a desired version of Apache Kafka®. For available versions, see the documentation main page: https://cloud.yandex.com/en/docs/managed-kafka/
-  source_user_password = "" # Set a password for the Apache Kafka® user.
+  source_kf_version    = "" # Desired version of Apache Kafka®. For available versions, see the documentation main page: https://yandex.cloud/en/docs/managed-kafka/.
+  source_user_password = "" # Apache Kafka® user's password
 
   # Target Managed Service for MySQL cluster settings:
-  target_mysql_version = "" # Set a desired version of MySQL.  For available versions, see the documentation main page: https://cloud.yandex.com/en/docs/managed-mysql/
-  target_user_password = "" # Set a password for the MySQL user.
+  target_mysql_version = "" # Desired version of MySQL. For available versions, see the documentation main page: https://yandex.cloud/en/docs/managed-mysql/.
+  target_user_password = "" # MySQL user's password
 
   # Specify these settings ONLY AFTER the clusters are created. Then run "terraform apply" command again.
-  # You should set up endpoints using the GUI to obtain their IDs.
-  source_endpoint_id = "" # Set the source endpoint ID.
-  transfer_enabled   = 0  # Set to 1 to enable Transfer.
+  # You should set up endpoints using the GUI to obtain their IDs
+  source_endpoint_id = "" # Set the source endpoint ID
+  transfer_enabled   = 0  # Set to 1 to enable the transfer
+
+  # The following settings are predefined. Change them only if necessary.
+  network_name         = "network"                  # Name of the network
+  subnet_name          = "subnet-a"                 # Name of the subnet
+  source_cluster_name  = "kafka-cluster"            # Name of the Apache Kafka® cluster
+  source_topic         = "sensors"                  # Name of the Apache Kafka® topic
+  source_username      = "mkf-user"                 # Username of the Apache Kafka® cluster
+  target_cluster_name  = "mysql-cluster"            # Name of the MySQL cluster
+  target_db_name       = "db1"                      # Name of the MySQL database
+  target_username      = "mmy-user"                 # Username of the MySQL cluster
+  target_endpoint_name = "mmy-target-tf"            # Name of the target endpoint for the Managed Service for MySQL cluster
+  transfer_name        = "transfer-from-mkf-to-mmy" # Name of the transfer from the Managed Service for Apache Kafka® to the Managed Service for MySQL
 }
 
+# Network infrastructure
+
 resource "yandex_vpc_network" "network" {
-  description = "Network for the Managed Service for Apache Kafka® and MySQL clusters"
-  name        = "network"
+  description = "Network for the Managed Service for Apache Kafka® and Managed Service for MySQL clusters"
+  name        = local.network_name
 }
 
 resource "yandex_vpc_subnet" "subnet-a" {
   description    = "Subnet in the ru-central1-a availability zone"
-  name           = "subnet-a"
+  name           = local.subnet_name
   zone           = "ru-central1-a"
   network_id     = yandex_vpc_network.network.id
   v4_cidr_blocks = ["10.1.0.0/16"]
 }
 
 resource "yandex_vpc_security_group" "clusters-security-group" {
-  description = "Security group for the Managed Service for Apache Kafka and Managed Service for MySQL clusters"
+  description = "Security group for the Managed Service for Apache Kafka® and Managed Service for MySQL clusters"
   network_id  = yandex_vpc_network.network.id
 
   ingress {
@@ -59,9 +74,11 @@ resource "yandex_vpc_security_group" "clusters-security-group" {
   }
 }
 
+# Infrastructure for the Managed Service for Apache Kafka® cluster
+
 resource "yandex_mdb_kafka_cluster" "kafka-cluster" {
   description        = "Managed Service for Apache Kafka® cluster"
-  name               = "kafka-cluster"
+  name               = local.source_cluster_name
   environment        = "PRODUCTION"
   network_id         = yandex_vpc_network.network.id
   security_group_ids = [yandex_vpc_security_group.clusters-security-group.id]
@@ -80,31 +97,39 @@ resource "yandex_mdb_kafka_cluster" "kafka-cluster" {
     }
   }
 
-  user {
-    name     = "mkf-user"
-    password = local.source_user_password
-    permission {
-      topic_name = "sensors"
-      role       = "ACCESS_ROLE_CONSUMER"
-    }
-    permission {
-      topic_name = "sensors"
-      role       = "ACCESS_ROLE_PRODUCER"
-    }
-  }
+  depends_on = [
+    yandex_vpc_subnet.subnet-a
+  ]
 }
 
-# Managed Service for Apache Kafka® topic.
+# Topic of the Managed Service for Apache Kafka® cluster
 resource "yandex_mdb_kafka_topic" "sensors" {
   cluster_id         = yandex_mdb_kafka_cluster.kafka-cluster.id
-  name               = "sensors"
+  name               = local.source_topic
   partitions         = 2
   replication_factor = 1
 }
 
+# User of the Managed Service for Apache Kafka® cluster
+resource "yandex_mdb_kafka_user" "mkf-user" {
+  cluster_id = yandex_mdb_kafka_cluster.kafka-cluster.id
+  name       = local.source_username
+  password   = local.source_user_password
+  permission {
+    topic_name = yandex_mdb_kafka_topic.sensors.name
+    role       = "ACCESS_ROLE_CONSUMER"
+  }
+  permission {
+    topic_name = yandex_mdb_kafka_topic.sensors.name
+    role       = "ACCESS_ROLE_PRODUCER"
+  }
+}
+
+# Infrastructure for the Managed Service for MySQL cluster
+
 resource "yandex_mdb_mysql_cluster" "mysql-cluster" {
   description        = "Managed Service for MySQL cluster"
-  name               = "mysql-cluster"
+  name               = local.target_cluster_name
   environment        = "PRODUCTION"
   network_id         = yandex_vpc_network.network.id
   version            = local.target_mysql_version
@@ -123,16 +148,16 @@ resource "yandex_mdb_mysql_cluster" "mysql-cluster" {
   }
 }
 
-# Managed Service for MySQL cluster database
+# Database of the Managed Service for MySQL cluster
 resource "yandex_mdb_mysql_database" "db1" {
   cluster_id = yandex_mdb_mysql_cluster.mysql-cluster.id
-  name       = "db1"
+  name       = local.target_db_name
 }
 
-# Managed Service for MySQL cluster user
+# User of the Managed Service for MySQL cluster
 resource "yandex_mdb_mysql_user" "user1" {
   cluster_id = yandex_mdb_mysql_cluster.mysql-cluster.id
-  name       = "mmy-user"
+  name       = local.target_username
   password   = local.target_user_password
   permission {
     database_name = yandex_mdb_mysql_database.db1.name
@@ -140,10 +165,12 @@ resource "yandex_mdb_mysql_user" "user1" {
   }
 }
 
+# Data Transfer infrastructure
+
 resource "yandex_datatransfer_endpoint" "mmy_target" {
   count       = local.transfer_enabled
-  description = "Target endpoint for MySQL cluster"
-  name        = "mmy-target-tf"
+  description = "Target endpoint for the Managed Service for MySQL cluster"
+  name        = local.target_endpoint_name
   settings {
     mysql_target {
       connection {
@@ -159,10 +186,10 @@ resource "yandex_datatransfer_endpoint" "mmy_target" {
 }
 
 resource "yandex_datatransfer_transfer" "mkf-mmy-transfer" {
-  count       = local.transfer_enabled
   description = "Transfer from the Managed Service for Apache Kafka® to the Managed Service for MySQL"
-  name        = "transfer-from-mkf-to-mmy"
+  count       = local.transfer_enabled
+  name        = local.transfer_name
   source_id   = local.source_endpoint_id
   target_id   = yandex_datatransfer_endpoint.mmy_target[count.index].id
-  type        = "INCREMENT_ONLY" # Replication data.
+  type        = "INCREMENT_ONLY" # Replication data
 }
