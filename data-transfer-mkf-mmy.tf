@@ -14,9 +14,7 @@ locals {
   target_mysql_version = "" # Desired version of MySQL. For available versions, see the documentation main page: https://yandex.cloud/en/docs/managed-mysql/.
   target_user_password = "" # MySQL user's password
 
-  # Specify these settings ONLY AFTER the clusters are created. Then run "terraform apply" command again.
-  # You should set up endpoints using the GUI to obtain their IDs
-  source_endpoint_id = "" # Set the source endpoint ID
+  # Specify this setting ONLY AFTER the clusters are created. Then run "terraform apply" command again.
   transfer_enabled   = 0  # Set to 1 to enable the transfer
 
   # The following settings are predefined. Change them only if necessary.
@@ -25,11 +23,12 @@ locals {
   source_cluster_name  = "kafka-cluster"            # Name of the Apache Kafka® cluster
   source_topic         = "sensors"                  # Name of the Apache Kafka® topic
   source_username      = "mkf-user"                 # Username of the Apache Kafka® cluster
+  source_endpoint_name = "mkf-target-tf"            # Name of the target endpoint for the Managed Service for Apache Kafka® cluster
   target_cluster_name  = "mysql-cluster"            # Name of the MySQL cluster
   target_db_name       = "db1"                      # Name of the MySQL database
   target_username      = "mmy-user"                 # Username of the MySQL cluster
   target_endpoint_name = "mmy-target-tf"            # Name of the target endpoint for the Managed Service for MySQL cluster
-  transfer_name        = "transfer-from-mkf-to-mmy" # Name of the transfer from the Managed Service for Apache Kafka® to the Managed Service for MySQL
+  transfer_name        = "transfer-from-mkf-to-mmy" # Name of the transfer from Managed Service for Apache Kafka® to Managed Service for MySQL
 }
 
 # Network infrastructure
@@ -167,7 +166,76 @@ resource "yandex_mdb_mysql_user" "user1" {
 
 # Data Transfer infrastructure
 
-resource "yandex_datatransfer_endpoint" "mmy_target" {
+resource "yandex_datatransfer_endpoint" "kf-source" {
+  description = "Source endpoint for the Managed Service for Apache Kafka® cluster"
+  count       = local.transfer_enabled
+  name        = local.source_endpoint_name
+  settings {
+    kafka_source {
+      connection {
+        cluster_id = yandex_mdb_kafka_cluster.kafka-cluster.id
+      }
+      auth {
+        sasl {
+          user = yandex_mdb_kafka_user.mkf-user.name
+          password {
+            raw = local.source_user_password
+          }
+        }
+      }
+      topic_names = [
+        yandex_mdb_kafka_topic.sensors.name
+      ]
+      parser {
+        json_parser {
+          data_schema {
+            fields {
+              fields {
+                name = "device_id"
+                type = "UTF8"
+                key  = true
+              }
+              fields {
+                name = "datetime"
+                type = "UTF8"
+              }
+              fields {
+                name = "latitude"
+                type = "DOUBLE"
+              }
+              fields {
+                name = "longitude"
+                type = "DOUBLE"
+              }
+              fields {
+                name = "altitude"
+                type = "DOUBLE"
+              }
+              fields {
+                name = "speed"
+                type = "DOUBLE"
+              }
+              fields {
+                name = "battery_voltage"
+                type = "DOUBLE"
+              }
+              fields {
+                name = "cabin_temperature"
+                type = "UINT16"
+              }
+              fields {
+                name = "fuel_level"
+                type = "UINT16"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "yandex_datatransfer_endpoint" "my-target" {
   count       = local.transfer_enabled
   description = "Target endpoint for the Managed Service for MySQL cluster"
   name        = local.target_endpoint_name
@@ -189,7 +257,7 @@ resource "yandex_datatransfer_transfer" "mkf-mmy-transfer" {
   description = "Transfer from the Managed Service for Apache Kafka® to the Managed Service for MySQL"
   count       = local.transfer_enabled
   name        = local.transfer_name
-  source_id   = local.source_endpoint_id
-  target_id   = yandex_datatransfer_endpoint.mmy_target[count.index].id
-  type        = "INCREMENT_ONLY" # Replication data
+  source_id   = yandex_datatransfer_endpoint.kf-source[count.index].id
+  target_id   = yandex_datatransfer_endpoint.my-target[count.index].id
+  type        = "INCREMENT_ONLY" # Data replication
 }
